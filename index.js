@@ -107,22 +107,26 @@ function commitRoot() {
   deletions.forEach(commitWork)
   // 提交子节点的工作
   commitWork(wipRoot.child)
-  // 将当前根节点设置为待提交的根节点
+  // 用于存上一次commit的fiber tree的root
   currentRoot = wipRoot
   // 清空待提交的根节点
   wipRoot = null
 }
-
+/**
+ * 由于函数式组件没有dom，所以在commitWork中也需要做相应更改，首先需要沿fiber tree向上寻找到一个有dom的fiber，将函数式组件中children的dom添加进去
+ * @param {*} fiber 
+ * @returns 
+ */
 function commitWork(fiber) {
   if (!fiber) { // 如果fiber为空，则返回
     return
   }
-
-  let domParentFiber = fiber.parent // 获取fiber的父fiber
-  while (!domParentFiber.dom) { // 循环直到找到有dom属性的父fiber
-    domParentFiber = domParentFiber.parent // 将父fiber赋值给domParentFiber
+  // 循环直到找到有dom属性的父fiber 将函数式组件中children的fiber的dom添加到其中
+  let domParentFiber = fiber.parent
+  while (!domParentFiber.dom) {
+    domParentFiber = domParentFiber.parent
   }
-  const domParent = domParentFiber.dom // 将父fiber的dom属性赋值给domParent
+  const domParent = domParentFiber.dom
 
   if (
     fiber.effectTag === "PLACEMENT" && // 如果fiber的effectTag为"PLACEMENT"且fiber的dom不为空
@@ -176,7 +180,7 @@ function render(element, container) {
     props: {
       children: [element],
     },
-    alternate: currentRoot,
+    alternate: currentRoot, //每一棵fiber tree都有一个属性指向上次commit的fiber tree root
   }
   deletions = []
   nextUnitOfWork = wipRoot
@@ -184,9 +188,11 @@ function render(element, container) {
 }
 //记录下一个待处理的UI单元操作
 let nextUnitOfWork = null
+//上一次构建的fiber tree root
 let currentRoot = null
+//work in progress root 保存当前正在构建的树的根节点
 let wipRoot = null
-//记录被删除的节点
+//用于存储需要删除的node    
 let deletions = null
 
 function workLoop(deadline) {
@@ -201,8 +207,9 @@ function workLoop(deadline) {
     // 检查是否达到帧率限制
     shouldYield = deadline.timeRemaining() < 1
   }
-
-  // 如果没有未完成的UI单元操作，但是还有未处理的根UI单元操作，则进行提交和渲染
+  //基于上一步的实现，我们每个unit中都会添加一个新的node到DOM中，但是在我们构建并渲染完整棵树前，
+  //每次unit结束浏览器主线程都可能会打断渲染，这样用户可能看到不完整的UI。为解决这个问题，我们希望整棵DOM树都构建完成再提交渲染。
+  // 整棵树都渲染完成则commit
   if (!nextUnitOfWork && wipRoot) {
     commitRoot()
   }
@@ -223,6 +230,7 @@ function performUnitOfWork(fiber) {
     // 非函数组件更新
     updateHostComponent(fiber)
   }
+  //寻找下一个进入work unit的fiber:child-->sibling-->uncle
   // 若fiber有子fiber，则返回子fiber
   if (fiber.child) {
     return fiber.child
@@ -242,7 +250,7 @@ let wipFiber = null
 let hookIndex = null
 
 /**
- * 更新函数组件
+ * 更新函数组件 对函数式组件，则通过执行该函数，获得解析成原生元素组成的组件，再像对待普通元素一样reconcileChildren
  * @param {Object} fiber - 组件的 Fiber 对象
  */
 function updateFunctionComponent(fiber) {
@@ -254,45 +262,38 @@ function updateFunctionComponent(fiber) {
 }
 
 function useState(initial) {
-  // 获取当前单元格的备选单元格的钩子函数
   const oldHook =
     wipFiber.alternate &&
     wipFiber.alternate.hooks &&
     wipFiber.alternate.hooks[hookIndex]
-  // 创建新的钩子函数
   const hook = {
     state: oldHook ? oldHook.state : initial,
     queue: [],
   }
 
-  // 处理备选单元格的行动数组
   const actions = oldHook ? oldHook.queue : []
   actions.forEach(action => {
-    // 依次执行行动函数并更新状态
     hook.state = action(hook.state)
   })
 
-  // 设置新的状态
+  //每次setState，都设置一个新的wipRoot作为下一个work unit，workLoop就可以进入新的渲染
+  //也就是说这样写每次setState都会触发渲染，在updateQueue里注册任务
+  //但是react真正的实现中有batchUpdate机制，也就是合并更新，在同一个事务（？）中的setState会进行state合并
+  //React 18后，所有的setState都会是异步的也就是都会合并更新？？autoUpdate
   const setState = action => {
-    // 将新的行动函数添加到钩子函数的行动队列中
     hook.queue.push(action)
-    // 设置下一个待处理的单元格为备选单元格
     wipRoot = {
       dom: currentRoot.dom,
       props: currentRoot.props,
       alternate: currentRoot,
     }
-    // 设置下一个待处理的单元格为备选单元格
     nextUnitOfWork = wipRoot
     // 初始化删除操作数组
     deletions = []
   }
 
-  // 将新的钩子函数添加到当前单元格的钩子函数数组中
   wipFiber.hooks.push(hook)
-  // 增加钩子函数的索引
   hookIndex++
-  // 返回初始状态和设置状态的函数
   return [hook.state, setState]
 }
 
@@ -308,7 +309,7 @@ function updateHostComponent(fiber) {
   reconcileChildren(fiber, fiber.props.children)
 }
 
-// 根据未完成的工作量和元素列表重新组合子元素
+// 根据当前fiber的children elements对比old fiber执行新增，更新和删除的操作
 function reconcileChildren(wipFiber, elements) {
   // 初始化索引和旧fiber
   let index = 0
@@ -330,7 +331,7 @@ function reconcileChildren(wipFiber, elements) {
 
     // 如果类型相同
     if (sameType) {
-      // 创建新的fiber，类型、属性和dom与旧fiber相同，但parent和alternate指向当前fiber
+      // 创建新的fiber，类型和dom与旧fiber相同，属性更新为当前fiber的props,parent指向当前fiber，alternate指向旧fiber
       newFiber = {
         type: oldFiber.type,
         props: element.props,
@@ -342,7 +343,7 @@ function reconcileChildren(wipFiber, elements) {
     }
     // 如果类型不同
     if (element && !sameType) {
-      // 创建新的fiber，类型、属性和dom未定义，parent和alternate为当前fiber
+      // 创建新的fiber
       newFiber = {
         type: element.type,
         props: element.props,
@@ -359,7 +360,7 @@ function reconcileChildren(wipFiber, elements) {
       deletions.push(oldFiber)
     }
 
-    // 将旧fiber指向下一个兄弟节点
+    // 将旧fiber指向下一个兄弟节点 按层比较
     if (oldFiber) {
       oldFiber = oldFiber.sibling
     }
