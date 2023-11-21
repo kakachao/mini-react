@@ -180,17 +180,18 @@ function render(element, container) {
   }
   deletions = []
   nextUnitOfWork = wipRoot
-}
 
+}
+//记录下一个待处理的UI单元操作
 let nextUnitOfWork = null
 let currentRoot = null
 let wipRoot = null
+//记录被删除的节点
 let deletions = null
 
 function workLoop(deadline) {
   // 定义一个布尔变量，用于指示是否需要进行UI更新
   let shouldYield = false
-
   // 循环执行未完成的UI单元操作，直到所有UI单元操作完成或者达到帧率限制
   while (nextUnitOfWork && !shouldYield) {
     // 执行下一个UI单元操作，并返回下一个待处理的UI单元操作
@@ -309,14 +310,19 @@ function updateHostComponent(fiber) {
 
 // 根据未完成的工作量和元素列表重新组合子元素
 function reconcileChildren(wipFiber, elements) {
+  // 初始化索引和旧fiber
   let index = 0
   let oldFiber = wipFiber.alternate && wipFiber.alternate.child
+  // 初始化前一个兄弟节点
   let prevSibling = null
 
+  // 循环直到元素数组遍历完或旧fiber遍历完
   while (index < elements.length || oldFiber != null) {
+    // 获取当前元素和新的fiber
     const element = elements[index]
     let newFiber = null
 
+    // 如果旧fiber和当前元素类型相同
     const sameType =
       oldFiber &&
       element &&
@@ -324,6 +330,7 @@ function reconcileChildren(wipFiber, elements) {
 
     // 如果类型相同
     if (sameType) {
+      // 创建新的fiber，类型、属性和dom与旧fiber相同，但parent和alternate指向当前fiber
       newFiber = {
         type: oldFiber.type,
         props: element.props,
@@ -335,6 +342,7 @@ function reconcileChildren(wipFiber, elements) {
     }
     // 如果类型不同
     if (element && !sameType) {
+      // 创建新的fiber，类型、属性和dom未定义，parent和alternate为当前fiber
       newFiber = {
         type: element.type,
         props: element.props,
@@ -346,20 +354,24 @@ function reconcileChildren(wipFiber, elements) {
     }
     // 如果类型不同
     if (oldFiber && !sameType) {
+      // 将旧fiber的effectTag标记为DELETION，并将其添加到deletions数组中
       oldFiber.effectTag = "DELETION"
       deletions.push(oldFiber)
     }
 
+    // 将旧fiber指向下一个兄弟节点
     if (oldFiber) {
       oldFiber = oldFiber.sibling
     }
 
+    // 将新的fiber与前一个兄弟节点连接
     if (index === 0) {
       wipFiber.child = newFiber
     } else if (element) {
       prevSibling.sibling = newFiber
     }
 
+    // 更新前一个兄弟节点为当前fiber
     prevSibling = newFiber
     index++
   }
